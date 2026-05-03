@@ -3,7 +3,6 @@ import sys
 import sqlite3
 import shutil
 import threading
-import webview
 from datetime import datetime
 from flask import Flask, render_template, request, redirect, url_for, jsonify, flash
 
