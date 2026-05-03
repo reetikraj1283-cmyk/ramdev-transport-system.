@@ -4,166 +4,155 @@ from datetime import datetime
 from sqlalchemy import create_engine, text
 
 # --- 1. CLOUD DATABASE CONNECTION ---
+try:
+    DB_URI = st.secrets["DB_URL"]
+    engine = create_engine(DB_URI, pool_pre_ping=True)
+except Exception as e:
+    st.error("Database Connection Failed. Check your Secrets configuration.")
+    st.stop()
 
-def resource_path(relative_path):
-    try:
-        base_path = sys._MEIPASS
-    except Exception:
-        base_path = os.path.abspath(".")
-    return os.path.join(base_path, relative_path)
+# --- 2. HIGH-CLARITY CENTERED UI CSS ---
+st.set_page_config(page_title="Ramdev Enterprise", layout="wide", page_icon="🚛")
 
-app = Flask(__name__, template_folder=resource_path("templates"), static_folder=resource_path("static"))
-app.secret_key = "ramdev_pro_secure_key"
+st.markdown("""
+    <style>
+    /* Global Theme */
+    .stApp { background: #0f172a; color: #ffffff; }
+    .block-container { max-width: 1100px !important; margin: auto !important; padding-top: 2rem !important; }
+    [data-testid="stSidebar"] { display: none; }
 
-def get_db():
-    conn = sqlite3.connect('ramdev_transport.db')
-    conn.row_factory = sqlite3.Row
-    return conn
+    /* BRAND HEADING */
+    h1 {
+        text-align: center !important;
+        font-family: 'Impact', 'Arial Black', sans-serif !important;
+        background: linear-gradient(135deg, #ffffff 0%, #60a5fa 50%, #1e40af 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        font-size: 72px !important;
+        font-weight: 900 !important;
+        margin-bottom: 0px !important;
+        text-transform: uppercase;
+        filter: drop-shadow(0px 5px 10px rgba(0, 0, 0, 0.5));
+    }
+    .sub-header {
+        text-align: center; color: #60a5fa; font-weight: 700; font-size: 16px;
+        letter-spacing: 8px; margin-top: -10px; margin-bottom: 40px; text-transform: uppercase;
+    }
 
-def init_db():
-    conn = get_db()
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS parcels 
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT, receipt TEXT, 
-                  receiver TEXT, weight REAL, bale_no TEXT, parcel_count INTEGER)''')
-    c.execute('CREATE INDEX IF NOT EXISTS idx_receipt ON parcels(receipt)')
-    c.execute('CREATE INDEX IF NOT EXISTS idx_receiver ON parcels(receiver)')
+    /* NAVIGATION */
+    div.stRadio > div {
+        display: flex; flex-direction: row; justify-content: center !important;
+        gap: 15px; background: #1e293b; padding: 10px; border-radius: 12px;
+        border: 2px solid #334155; margin: 0 auto 40px auto; width: fit-content;
+    }
+    div.stRadio > div > label {
+        color: #cbd5e1 !important; padding: 10px 22px !important;
+        border-radius: 8px !important; font-weight: 700 !important; font-size: 16px !important;
+    }
+    div.stRadio > div > label[data-checked="true"] {
+        background: #3b82f6 !important; color: #ffffff !important;
+        box-shadow: 0 4px 15px rgba(59, 130, 246, 0.5);
+    }
+    div.stRadio div[role="radiogroup"] > label > div:first-child { display: none !important; }
+
+    /* METRICS */
+    div[data-testid="metric-container"] {
+        background: #1e293b !important; border: 2px solid #3b82f6 !important;
+        padding: 25px !important; border-radius: 15px !important; text-align: center;
+    }
+    div[data-testid="stMetricValue"] > div { font-size: 40px !important; font-weight: 800 !important; color: #ffffff !important; }
+    div[data-testid="stMetricLabel"] > div { font-size: 18px !important; color: #94a3b8 !important; font-weight: 600 !important; }
+
+    .stButton>button {
+        border-radius: 10px; background: #3b82f6; color: white; font-weight: 700;
+        height: 3.5rem; width: 100%; font-size: 18px; border: none;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+# --- 3. HEADER & MENU ---
+st.markdown("<h1>RAMDEV SUPER SERVICE</h1>", unsafe_allow_html=True)
+st.markdown("<p class='sub-header'>Simply Super Logistics</p>", unsafe_allow_html=True)
+
+choice = st.radio("NAV", ["📊 Dashboard", "➕ New Entry", "📂 Ledger", "🧾 Billing", "👥 Directory"], 
+                  horizontal=True, label_visibility="collapsed")
+st.markdown("<hr style='border-color: #334155;'>", unsafe_allow_html=True)
+
+# --- 4. PAGE LOGIC ---
+
+if choice == "📊 Dashboard":
+    with engine.connect() as conn:
+        df_p = pd.read_sql("SELECT * FROM parcels", conn)
+        df_i = pd.read_sql("SELECT * FROM invoices", conn)
     
-    c.execute('''CREATE TABLE IF NOT EXISTS clients 
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, 
-                  gstin TEXT, address TEXT, default_rate REAL DEFAULT 0.0)''')
+    col1, col2, col3 = st.columns(3)
+    if not df_p.empty:
+        col1.metric("Gross Weight", f"{df_p['weight'].sum():,.1f} KG")
+        col2.metric("Shipments", f"{len(df_p)}")
+    if not df_i.empty:
+        pending = df_i[df_i['status'] == 'Unpaid']['total_amount'].sum()
+        col3.metric("Pending Dues", f"₹{pending:,.0f}")
+
+elif choice == "➕ New Entry":
+    st.write("## Register Shipment")
+    with engine.connect() as conn:
+        clients = pd.read_sql("SELECT name FROM clients", conn)['name'].tolist()
     
-    c.execute('''CREATE TABLE IF NOT EXISTS invoices 
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, client_name TEXT, month TEXT, 
-                  amount REAL, status TEXT DEFAULT 'Pending', date_gen TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
-    conn.commit()
-    conn.close()
-
-@app.route('/')
-def dashboard():
-    conn = get_db()
-    res = conn.execute("SELECT COUNT(*), SUM(weight) FROM parcels").fetchone()
-    pending = conn.execute("SELECT SUM(amount) FROM invoices WHERE status='Pending'").fetchone()[0] or 0
-    recent = conn.execute("SELECT * FROM parcels ORDER BY id DESC LIMIT 5").fetchall()
-    conn.close()
-    return render_template('dashboard.html', total=res[0], weight=res[1] or 0, pending=pending, parcels=recent)
-
-@app.route('/add', methods=['GET', 'POST'])
-def add_entry():
-    if request.method == 'POST':
-        conn = get_db()
-        conn.execute("INSERT INTO parcels (date, receipt, receiver, weight, bale_no, parcel_count) VALUES (?,?,?,?,?,?)",
-                     (request.form['date'], request.form['lr'], request.form['receiver'], 
-                      float(request.form['weight']), request.form['bale_no'], int(request.form['parcel_count'])))
-        conn.commit()
-        conn.close()
-        flash("Entry Saved Successfully!", "success")
-        return redirect(url_for('ledger'))
-    conn = get_db()
-    clients = conn.execute("SELECT name FROM clients ORDER BY name ASC").fetchall()
-    conn.close()
-    return render_template('entry.html', clients=clients)
-
-@app.route('/ledger')
-def ledger():
-    page = request.args.get('page', 1, type=int)
-    per_page = 50
-    offset = (page - 1) * per_page
-    search = request.args.get('search', '')
-    conn = get_db()
-    if search:
-        query = "SELECT * FROM parcels WHERE receipt LIKE ? OR receiver LIKE ? ORDER BY date DESC LIMIT ? OFFSET ?"
-        parcels = conn.execute(query, (f'%{search}%', f'%{search}%', per_page, offset)).fetchall()
-        total_rows = conn.execute("SELECT COUNT(*) FROM parcels WHERE receipt LIKE ? OR receiver LIKE ?", (f'%{search}%', f'%{search}%')).fetchone()[0]
-    else:
-        query = "SELECT * FROM parcels ORDER BY date DESC LIMIT ? OFFSET ?"
-        parcels = conn.execute(query, (per_page, offset)).fetchall()
-        total_rows = conn.execute("SELECT COUNT(*) FROM parcels").fetchone()[0]
-    total_pages = max((total_rows + per_page - 1) // per_page, 1)
-    conn.close()
-    return render_template('ledger.html', parcels=parcels, search_query=search, page=page, total_pages=total_pages)
-
-@app.route('/directory', methods=['GET', 'POST'])
-def directory():
-    conn = get_db()
-    if request.method == 'POST':
-        name = request.form['name'].strip().upper()
-        existing = conn.execute("SELECT id FROM clients WHERE name = ?", (name,)).fetchone()
-        if existing:
-            flash(f"ERROR: Client '{name}' already exists in Directory!", "danger")
-        else:
-            conn.execute("INSERT INTO clients (name, gstin, address, default_rate) VALUES (?,?,?,?)", 
-                         (name, request.form['gstin'].upper(), request.form['address'], float(request.form.get('default_rate', 0))))
-            conn.commit()
-            flash(f"Client '{name}' Registered Successfully!", "success")
-    clients = conn.execute("SELECT * FROM clients ORDER BY name ASC").fetchall()
-    conn.close()
-    return render_template('directory.html', clients=clients)
-
-@app.route('/delete_client/<int:id>')
-def delete_client(id):
-    conn = get_db()
-    conn.execute("DELETE FROM clients WHERE id=?", (id,))
-    conn.commit()
-    conn.close()
-    flash("Client Deleted Successfully!", "success")
-    return redirect(url_for('directory'))
-
-@app.route('/backup_action')
-def backup_action():
-    try:
-        db_path = 'ramdev_transport.db'
-        backup_name = f"Ramdev_Backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
-        dest = os.path.join(os.path.expanduser("~"), "Desktop", backup_name)
-        shutil.copy2(db_path, dest)
-        flash(f"Backup Saved to Desktop as {backup_name}", "success")
-    except Exception as e:
-        flash(f"Backup Failed: {str(e)}", "danger")
-    return redirect(url_for('directory'))
-
-@app.route('/get_rate/<client_name>')
-def get_rate(client_name):
-    conn = get_db()
-    client = conn.execute("SELECT default_rate FROM clients WHERE name = ?", (client_name,)).fetchone()
-    conn.close()
-    return jsonify({"rate": client['default_rate'] if client else 0.0})
-
-@app.route('/billing', methods=['GET', 'POST'])
-def billing():
-    conn = get_db()
-    clients = conn.execute("SELECT * FROM clients ORDER BY name ASC").fetchall()
-    report, summary = [], {'total_bill': 0, 'client_name': "", 'month': ""}
-    invoice_date_to_show = ""
-    
-    if request.method == 'POST':
-        client_name = request.form.get('client')
-        month = request.form.get('month')
-        rate = float(request.form.get('rate', 0))
-        min_chg = float(request.form.get('min_charge', 0))
-        invoice_date_to_show = request.form.get('invoice_date')
+    with st.form("ship_form", clear_on_submit=True):
+        c1, c2 = st.columns(2)
+        date = c1.date_input("Loading Date")
+        lr = c2.text_input("LR / Receipt Number")
+        sender = st.text_input("Sender Party")
+        receiver = st.selectbox("Receiver Client", [""] + clients)
         
-        client_info = conn.execute("SELECT * FROM clients WHERE name = ?", (client_name,)).fetchone()
-        rows = conn.execute("SELECT * FROM parcels WHERE receiver = ? AND date LIKE ? ORDER BY date ASC", (client_name, f"{month}%")).fetchall()
-        for row in rows:
-            p = dict(row)
-            p['cost'] = max(p['weight'] * rate, min_chg)
-            p['is_min'] = (p['cost'] == min_chg)
-            report.append(p)
-        total = sum(p['cost'] for p in report)
+        c3, c4, c5 = st.columns(3)
+        bale = c3.text_input("Bale No")
+        qty = c4.number_input("Qty", min_value=1)
+        wt = c5.number_input("Weight (KG)", min_value=0.1)
         
-        # Save invoice to database for dashboard tracking
-        conn.execute("INSERT INTO invoices (client_name, month, amount, status) VALUES (?,?,?,?)",
-                     (client_name, month, total, 'Pending'))
-        conn.commit()
-        
-        summary.update({'client_name': client_name, 'client_gst': client_info['gstin'], 'client_addr': client_info['address'], 'month': month, 'total_bill': total})
-    
-    invoices = conn.execute("SELECT * FROM invoices ORDER BY date_gen DESC LIMIT 10").fetchall()
-    conn.close()
-    return render_template('billing.html', clients=clients, report=report, summary=summary, invoice_date=invoice_date_to_show, invoices=invoices)
+        if st.form_submit_button("✅ SECURE ENTRY TO CLOUD"):
+            if receiver and lr:
+                with engine.connect() as conn:
+                    query = text("INSERT INTO parcels (date, receipt, sender, receiver, bale_no, parcel_count, weight) VALUES (:d, :r, :s, :rec, :b, :q, :w)")
+                    conn.execute(query, {"d": str(date), "r": lr, "s": sender, "rec": receiver, "b": bale, "q": qty, "w": wt})
+                    conn.commit()
+                st.success("Synchronized with Cloud Database.")
+            else:
+                st.error("LR No and Receiver are mandatory.")
 
-if __name__ == '__main__':
-    init_db()
-    threading.Thread(target=lambda: app.run(host='0.0.0.0', port=5000), daemon=True).start()
-    webview.create_window('RAMDEV SUPER SERVICE', 'http://127.0.0.1:5000', width=1300, height=850)
-    webview.start()
+elif choice == "📂 Ledger":
+    st.write("## Historical Ledger")
+    with engine.connect() as conn:
+        df = pd.read_sql("SELECT * FROM parcels ORDER BY id DESC", conn)
+    if not df.empty:
+        st.dataframe(df, use_container_width=True, hide_index=True)
+
+elif choice == "🧾 Billing":
+    st.write("## Invoicing Hub")
+    with engine.connect() as conn:
+        c_df = pd.read_sql("SELECT * FROM clients", conn)
+    
+    target = st.selectbox("Select Account", [""] + c_df['name'].tolist())
+    if target:
+        meta = c_df[c_df['name'] == target].iloc[0]
+        with engine.connect() as conn:
+            data = pd.read_sql(text("SELECT * FROM parcels WHERE receiver = :n"), conn, params={"n": target})
+        
+        if not data.empty:
+            data['Charge'] = data['weight'].apply(lambda x: max(x * meta['default_rate'], meta['min_amount']))
+            st.dataframe(data, use_container_width=True)
+            st.metric("Statement Balance", f"₹{data['Charge'].sum():,.2f}")
+
+elif choice == "👥 Directory":
+    st.write("## Client Master Directory")
+    with st.expander("Register New Account"):
+        with st.form("creg"):
+            n = st.text_input("Company Name").upper()
+            r = st.number_input("Rate (₹/KG)", value=7.5)
+            m = st.number_input("Min Bill (₹)", value=200.0)
+            if st.form_submit_button("SAVE PARTNER"):
+                if n:
+                    with engine.connect() as conn:
+                        conn.execute(text("INSERT INTO clients (name, default_rate, min_amount) VALUES (:n, :r, :m)"), {"n": n, "r": r, "m": m})
+                        conn.commit()
+                    st.rerun()
